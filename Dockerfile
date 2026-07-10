@@ -1,28 +1,23 @@
+# syntax=docker/dockerfile:1
 ARG BASE_IMAGE=node:24-slim
-FROM ${BASE_IMAGE}
+FROM ${BASE_IMAGE} AS common
 
-# ca-certificates for device-code auth
+ARG AGENT_UID=1000
+ARG AGENT_GID=1000
+ARG EXTRA_PACKAGES=""
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates \
- && rm -rf /var/lib/apt/lists/*
-
-RUN npm install -g @openai/codex
-
-# additional software aka dev tools
-RUN apt-get update \
- && apt-get install -y --no-install-recommends \
-        curl git ripgrep \
-    && rm -rf /var/lib/apt/lists/*
-
-# user setup
-RUN userdel --remove node
-RUN useradd --create-home --shell /bin/bash codex \
- && mkdir /home/codex/src
-USER codex
-WORKDIR /home/codex/src
-
-RUN git config --global user.name "Codex CLI" \
- && git config --global user.email "codex@no-mail.com" \
+ && apt-get install -y --no-install-recommends ca-certificates curl git ripgrep fd-find jq ${EXTRA_PACKAGES} \
+ && rm -rf /var/lib/apt/lists/* \
+ && if getent passwd node >/dev/null; then userdel --remove node; fi \
+ && groupadd --gid "${AGENT_GID}" agent \
+ && useradd --uid "${AGENT_UID}" --gid "${AGENT_GID}" --create-home --shell /bin/bash agent \
+ && mkdir -p /home/agent/src /home/agent/.agent-state \
+ && chown -R agent:agent /home/agent
+ENV PATH="/home/agent/.local/bin:${PATH}"
+USER agent
+WORKDIR /home/agent/src
+RUN git config --global user.name "Agent Sandbox" \
+ && git config --global user.email "agent@no-mail.com" \
  && git config --global pull.rebase true \
  && git config --global rebase.autoStash true \
  && git config --global branch.master.rebase false \
@@ -30,4 +25,24 @@ RUN git config --global user.name "Codex CLI" \
  && git config --global branch.main.rebase false \
  && git config --global branch.main.mergeoptions --ff-only
 
-CMD [ "codex", "--sandbox", "danger-full-access" ]
+FROM common AS codex
+ARG AGENT_VERSION=latest
+USER root
+RUN npm install -g "@openai/codex@${AGENT_VERSION}"
+USER agent
+ENV CODEX_HOME=/home/agent/.agent-state CODEX_DISABLE_UPDATE_CHECK=1
+CMD ["codex", "--sandbox", "danger-full-access", "--ask-for-approval", "never"]
+
+FROM common AS claude
+ARG AGENT_VERSION=latest
+RUN curl -fsSL https://claude.ai/install.sh | bash -s "${AGENT_VERSION}"
+ENV CLAUDE_CONFIG_DIR=/home/agent/.agent-state DISABLE_AUTOUPDATER=1
+CMD ["claude", "--dangerously-skip-permissions"]
+
+FROM common AS pi
+ARG AGENT_VERSION=latest
+USER root
+RUN npm install -g "@earendil-works/pi-coding-agent@${AGENT_VERSION}"
+USER agent
+ENV PI_CODING_AGENT_DIR=/home/agent/.agent-state PI_SKIP_UPDATE_CHECK=1
+CMD ["pi", "--yolo"]

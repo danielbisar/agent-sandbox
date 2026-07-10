@@ -1,91 +1,43 @@
-# Codex Docker Image
+# Agent Sandbox
 
-This repository builds a Docker image for running Codex in a container. The
-image installs `@openai/codex`, `git`, and `ripgrep`, creates a non-root `codex`
-user, and starts Codex from `/home/codex/src`.
+Agent Sandbox builds local, non-root Docker images for exactly one of Codex, Claude, or Pi. All variants share Debian/Node tooling, `/home/agent/src` as their workspace, and `/home/agent/.agent-state` as persistent state.
 
-## Requirements
+## Build
 
-- Docker
-- A local checkout of this repository
-
-## Quick Start
-
-1. Build the image:
+Docker and Bash 3.2 or newer are required.
 
 ```bash
-./build.sh
+./build.sh --agent codex
+./build.sh --agent claude --version 1.2.3 --no-pull
+./build.sh --agent pi --base-image node:24-slim --uid 1000 --gid 1000 \
+  --tools "make,gcc" --tools "make,zip=3.0-13" --suffix dev
 ```
 
-The script pulls the latest `node:24-slim` base image, tags the image as
-`codex:latest`, reads the installed Codex version from inside the image, and
-adds a matching `codex:<version>` tag. To skip the base-image pull, run
-`./build.sh --no-pull`.
+Omitting `--version` installs the newest stable release. Images are tagged only as `agent-sandbox:<agent>-<version>`, with `-<suffix>` when supplied; no `latest` tag is created. Extra tools must be valid Debian package names, optionally version-pinned. The image records build, source, identity, base-image, package, agent, version, and suffix labels and verifies the installed CLI before tagging.
 
-To change the base image, update `base_image` in `build.sh`; the script passes
-that value into the Dockerfile.
-
-2. Authenticate Codex:
+## Authenticate and run
 
 ```bash
-./auth.sh
+./auth.sh --agent codex
+./run.sh --agent codex /path/to/workspace
+./run.sh --agent claude --safe --read-only . -- --model sonnet
+./run.sh --agent pi --shell . -- -lc 'git status'
 ```
 
-The script creates `home_codex/`, mounts it at `/home/codex/.codex` inside the
-container, and runs `codex login --device-auth`. Follow the device-auth
-instructions printed by Codex. When the command exits, the saved authentication
-state remains in `home_codex/` on the host.
+Both commands select the highest stable, unsuffixed local image unless `--version` or `--suffix` narrows selection. They validate image labels and print the exact build command when none matches. Relative paths are resolved from the caller's directory. Containers are interactive, disposable, and use Docker's normal bridge network.
 
-To use a different auth directory:
+State defaults to `state/<agent>` or can be selected directly with `--state-dir PATH`. Missing directories are created mode 0700. Authentication is not required before normal launch. Codex authentication uses device login; Claude and Pi start their interactive provider setup. State can be shared by concurrent containers, so applications—not these wrappers—coordinate writes. Treat state as secret and never commit it.
+
+`run.sh` mounts workspaces read-write unless `--read-only` is used. Agents run unrestricted unless `--safe` restores vendor defaults. `--shell` starts Bash. Arguments after `--` are passed unchanged. `--selinux` adds private `:Z` relabeling to managed mounts.
+
+Repeat `--skills PATH` or `--skills-rw PATH` to mount skill directories beneath `.agent-state/skills`. Name collisions use `-2`, `-3`, and so on. Pi alone supports one complete extensions directory via `--extensions PATH` (read-only) or `--extensions-rw PATH`.
+
+## Tests
 
 ```bash
-./auth.sh --auth-dir /path/to/codex-auth
+./test.sh
+./test.sh --integration
+./test.sh --integration --agent codex
 ```
 
-3. Run Codex against a repository:
-
-```bash
-./run.sh /path/to/repo
-```
-
-To use a different auth directory when running:
-
-```bash
-./run.sh --auth-dir /path/to/codex-auth /path/to/repo
-```
-
-To enter a shell in the container instead of starting Codex:
-
-```bash
-./run.sh --shell /path/to/repo
-```
-
-`run.sh` mounts:
-
-- The auth directory to `/home/codex/.codex`
-- The target repository to `/home/codex/src`
-
-## Direct Docker Commands
-
-Build the image directly:
-
-```bash
-docker build -t codex:latest .
-```
-
-Open a shell for inspecting the image:
-
-```bash
-docker run -it --rm --entrypoint sh codex:latest
-```
-
-## Files
-
-- `Dockerfile`: defines the Codex container image.
-- `build.sh`: builds and tags the image.
-- `auth.sh`: runs Codex device authentication with auth state mounted to `home_codex/`.
-- `run.sh`: runs Codex or `/bin/bash` with authentication state and a mounted repository.
-- `home_codex/`: local runtime state for Codex credentials, cache, logs, and configuration.
-
-Treat `home_codex/` and any custom auth directory as sensitive local state. Do
-not commit credentials, copied Codex state, or generated SQLite/log files.
+Fast tests require no dependencies. Integration builds and smoke-tests images. Authentication persistence is manual: authenticate, exit, rerun authentication with the same state directory, and confirm credentials remain available.

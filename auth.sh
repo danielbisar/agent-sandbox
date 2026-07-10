@@ -1,66 +1,13 @@
 #!/bin/bash
 set -euo pipefail
-
-usage() {
-    cat >&2 <<EOF
-Usage: $0 [OPTIONS]
-
-Options:
-  --auth-dir PATH   Host directory for Codex auth state (default: ./home_codex)
-  --image IMAGE     Docker image to run (default: codex:latest)
-  -h, --help        Show this help message
-EOF
-}
-
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-auth_dir="$script_dir/home_codex"
-image="codex:latest"
-
-while [ "$#" -gt 0 ]; do
-    case "$1" in
-        --auth-dir)
-            if [ "$#" -lt 2 ]; then
-                echo "error: --auth-dir requires a path" >&2
-                usage
-                exit 1
-            fi
-            auth_dir="$2"
-            shift
-            ;;
-        --image)
-            if [ "$#" -lt 2 ]; then
-                echo "error: --image requires an image name" >&2
-                usage
-                exit 1
-            fi
-            image="$2"
-            shift
-            ;;
-        -h|--help)
-            usage
-            exit 0
-            ;;
-        -*)
-            echo "error: unknown option: $1" >&2
-            usage
-            exit 1
-            ;;
-        *)
-            echo "error: unexpected argument: $1" >&2
-            usage
-            exit 1
-            ;;
-    esac
-    shift
-done
-
-mkdir -p "$auth_dir"
-auth_dir="$(cd "$auth_dir" && pwd)"
-
-echo "Using auth directory: $auth_dir" >&2
-echo "Starting Codex device authentication in $image..." >&2
-
-docker run -it --rm \
-    -v "$auth_dir:/home/codex/.codex" \
-    "$image" \
-    codex login --device-auth
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd); . "$script_dir/lib.sh"
+agent= requested_version= suffix= suffix_set=false state= selinux=false; forwarded=()
+usage() { echo "Usage: $0 --agent codex|claude|pi [--version VERSION] [--suffix VALUE] [--state-dir PATH] [--selinux] [-- AUTH_ARGS...]" >&2; }
+while [ "$#" -gt 0 ]; do case "$1" in
+ --) shift; forwarded=("$@"); break;; --agent) need_value "$@"; agent=$2; shift;; --version) need_value "$@"; requested_version=$2; shift;;
+ --suffix) need_value "$@"; suffix=$2; suffix_set=true; shift;; --state-dir) need_value "$@"; state=$2; shift;; --selinux) selinux=true;;
+ -h|--help) usage; exit 0;; *) die "unknown argument: $1";; esac; shift; done
+validate_agent "$agent"; state=${state:-$script_dir/state/$agent}; state_dir=$(prepare_state "$state"); select_image
+z=; [ "$selinux" = false ] || z=,Z
+case "$agent" in codex) cmd=(codex login --device-auth);; claude) cmd=(claude);; pi) cmd=(pi);; esac
+exec docker run -it --rm -v "$state_dir:/home/agent/.agent-state:rw$z" "$image" "${cmd[@]}" "${forwarded[@]}"
