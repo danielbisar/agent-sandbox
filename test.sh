@@ -8,6 +8,8 @@ if [ "${1:-}" = --integration ]; then
   if [ "${1:-}" = --agent ]; then [ "$#" -ge 2 ] || { echo 'error: --agent requires a value' >&2; exit 1; }; only=$2; fi
   for a in codex claude pi; do [ -z "$only" ] || [ "$only" = "$a" ] || continue
     "$root/build.sh" --agent "$a"
+    # The command substitution intentionally runs inside the container shell.
+    # shellcheck disable=SC2016
     "$root/run.sh" --agent "$a" --shell "$root" -- -lc 'test "$(id -u)" != 0 && command -v git && command -v rg && command -v fdfind && command -v jq'
   done
   exit 0

@@ -12,6 +12,8 @@ prepare_state() {
   absolute_dir "$1"
 }
 select_image() {
+  # These globals are initialized by each public wrapper before this function is called.
+  # shellcheck disable=SC2154
   filter="label=org.agent-sandbox.agent=$agent"
   refs=$(docker image ls --format '{{.Repository}}:{{.Tag}}' --filter "$filter" 2>/dev/null | grep '^agent-sandbox:' || true)
   candidates=
@@ -22,6 +24,7 @@ select_image() {
     s=$(docker image inspect --format '{{index .Config.Labels "org.agent-sandbox.suffix"}}' "$ref" 2>/dev/null || true)
     [ "$a" = "$agent" ] || continue
     if [ -n "$requested_version" ]; then [ "$v" = "$requested_version" ] || continue; else case "$v" in *-*) continue;; esac; fi
+    # shellcheck disable=SC2154
     if [ "$suffix_set" = true ]; then [ "$s" = "$suffix" ] || continue; else [ -z "$s" ] || continue; fi
     candidates="${candidates}${candidates:+
 }$v$(printf '\t')$ref"
@@ -44,13 +47,19 @@ EOF
     [ "$suffix_set" = false ] || cmd="$cmd --suffix $suffix"
     die "no matching image; build it with: $cmd"
   }
-  image=${chosen#*$(printf '\t')}
-  selected_version=${chosen%%$(printf '\t')*}
+  tab=$(printf '\t')
+  # Outputs consumed by the wrapper that sourced this library.
+  # shellcheck disable=SC2034
+  image=${chosen#*"$tab"}
+  # shellcheck disable=SC2034
+  selected_version=${chosen%%"$tab"*}
 }
 add_skill_mounts() {
   mode=$1; shift
   for path in "$@"; do
     full=$(absolute_dir "$path"); base=$(basename "$full"); name=$base; n=2
+    # state_dir and skill_names are initialized by run.sh before this call.
+    # shellcheck disable=SC2154
     while [ -e "$state_dir/skills/$name" ] || case " $skill_names " in *" $name "*) true;; *) false;; esac; do name="$base-$n"; n=$((n + 1)); done
     skill_names="$skill_names $name"; mounts+=("-v" "$full:/home/agent/.agent-state/skills/$name:$mode")
   done

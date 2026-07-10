@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd); . "$script_dir/lib.sh"
-agent= requested_version= suffix= suffix_set=false state= workspace= read_only=false safe=false shell=false selinux=false extensions= extensions_mode=ro
+agent='' requested_version='' suffix='' suffix_set=false state='' workspace='' read_only=false safe=false shell=false selinux=false extensions='' extensions_mode=ro
 skills_ro=(); skills_rw=(); forwarded=()
 usage() { echo "Usage: $0 --agent codex|claude|pi [OPTIONS] WORKSPACE [-- AGENT_ARGS...]" >&2; }
 while [ "$#" -gt 0 ]; do

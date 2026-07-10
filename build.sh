@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-agent= version=latest base_image=node:24-slim pull=true uid=1000 gid=1000 suffix=
+agent='' version=latest base_image=node:24-slim pull=true uid=1000 gid=1000 suffix=''
 tools=()
 usage() { echo "Usage: $0 --agent codex|claude|pi [--version VERSION] [--base-image IMAGE] [--no-pull] [--uid UID] [--gid GID] [--tools pkg1,pkg2] [--suffix VALUE]" >&2; }
 die() { echo "error: $*" >&2; exit 1; }

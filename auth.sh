@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd); . "$script_dir/lib.sh"
-agent= requested_version= suffix= suffix_set=false state= selinux=false; forwarded=()
+agent='' requested_version='' suffix='' suffix_set=false state='' selinux=false; forwarded=()
 usage() { echo "Usage: $0 --agent codex|claude|pi [--version VERSION] [--suffix VALUE] [--state-dir PATH] [--selinux] [-- AUTH_ARGS...]" >&2; }
 while [ "$#" -gt 0 ]; do case "$1" in
  --) shift; forwarded=("$@"); break;; --agent) need_value "$@"; agent=$2; shift;; --version) need_value "$@"; requested_version=$2; shift;;
