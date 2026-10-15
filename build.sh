@@ -1,6 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+. "$script_dir/lib.sh"
+
 agent=''
 version=latest
 base_image=node:24-slim
@@ -14,29 +17,20 @@ usage() {
   echo "Usage: $0 --agent codex|claude|pi [--version VERSION] [--base-image IMAGE] [--no-pull] [--uid UID] [--gid GID] [--tools pkg1,pkg2] [--suffix VALUE]" >&2
 }
 
-die() {
-  echo "error: $*" >&2
-  exit 1
-}
-
-need() {
-  [ "$#" -ge 2 ] || die "$1 requires a value"
-}
-
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --agent)
-      need "$@"
+      need_value "$@"
       agent=$2
       shift
       ;;
     --version)
-      need "$@"
+      need_value "$@"
       version=$2
       shift
       ;;
     --base-image)
-      need "$@"
+      need_value "$@"
       base_image=$2
       shift
       ;;
@@ -44,22 +38,22 @@ while [ "$#" -gt 0 ]; do
       pull=false
       ;;
     --uid)
-      need "$@"
+      need_value "$@"
       uid=$2
       shift
       ;;
     --gid)
-      need "$@"
+      need_value "$@"
       gid=$2
       shift
       ;;
     --tools)
-      need "$@"
+      need_value "$@"
       tools+=("$2")
       shift
       ;;
     --suffix)
-      need "$@"
+      need_value "$@"
       suffix=$2
       shift
       ;;
@@ -84,26 +78,27 @@ case "$agent" in
 esac
 
 printf '%s\n%s\n' "$uid" "$gid" | grep -Eqv '^[0-9]+$' && die "UID and GID must be non-negative integers"
-if [ "$version" != latest ] && ! printf '%s\n' "$version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
-  die "invalid semantic version: $version"
-fi
+[ "$version" = latest ] || validate_version "$version"
 
 # Split repeated comma-separated lists and deduplicate exact package specifications.
 packages=
 old_ifs=$IFS
 IFS=,
-for list in "${tools[@]}"; do
-  for pkg in $list; do
-    printf '%s\n' "$pkg" | grep -Eq '^[a-z0-9][a-z0-9+.-]*(:[a-z0-9-]+)?(=[A-Za-z0-9.+:~_-]+)?$' || die "invalid Debian package: $pkg"
-    case " $packages " in
-      *" $pkg "*)
-        ;;
-      *)
-        packages="${packages:+$packages }$pkg"
-        ;;
-    esac
+# Avoid expanding an empty array under Bash 3.2's nounset behavior.
+if [ "${#tools[@]}" -gt 0 ]; then
+  for list in "${tools[@]}"; do
+    for pkg in $list; do
+      printf '%s\n' "$pkg" | grep -Eq '^[a-z0-9][a-z0-9+.-]*(:[a-z0-9-]+)?(=[A-Za-z0-9.+:~_-]+)?$' || die "invalid Debian package: $pkg"
+      case " $packages " in
+        *" $pkg "*)
+          ;;
+        *)
+          packages="${packages:+$packages }$pkg"
+          ;;
+      esac
+    done
   done
-done
+fi
 IFS=$old_ifs
 
 [ "$pull" = false ] || docker pull "$base_image"
@@ -118,44 +113,22 @@ docker build --target "$agent" -t "$tmp" \
   --build-arg "AGENT_GID=$gid" \
   --build-arg "EXTRA_PACKAGES=$packages" .
 
-case "$agent" in
-  codex)
-    reported=$(
-      docker run --rm "$tmp" codex --version |
-        sed -nE 's/.* ([0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?).*/\1/p' |
-        head -1
-    )
-    ;;
-  claude)
-    reported=$(
-      docker run --rm "$tmp" claude --version |
-        sed -nE 's/.*([0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?).*/\1/p' |
-        head -1
-    )
-    ;;
-  pi)
-    reported=$(
-      docker run --rm "$tmp" pi --version |
-        sed -nE 's/.*([0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?).*/\1/p' |
-        head -1
-    )
-    ;;
-esac
-
-[ -n "$reported" ] || die "could not determine installed $agent version"
+reported=$(read_agent_version "$agent" "$tmp")
 [ "$version" = latest ] || [ "$reported" = "$version" ] || die "installed version $reported does not match requested $version"
-case "$reported" in
+case "${reported%%+*}" in
   *-*)
     [ "$version" != latest ] || die "latest resolved to prerelease $reported"
     ;;
 esac
 
-tag="agent-sandbox:$agent-$reported${suffix:+-$suffix}"
+# Docker tags cannot contain '+'. Labels retain the exact SemVer, including metadata.
+tag_version=${reported//+/_}
+tag="agent-sandbox:$agent-$tag_version${suffix:+-$suffix}"
 commit=$(git rev-parse HEAD 2> /dev/null || echo unknown)
 dirty=false
 [ -z "$(git status --porcelain 2> /dev/null)" ] || dirty=true
 created=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-docker build --target "$agent" -t "$tag" \
+docker build --target "$agent" -t "$tmp" \
   --build-arg "BASE_IMAGE=$base_image" \
   --build-arg "AGENT_VERSION=$reported" \
   --build-arg "AGENT_UID=$uid" \
@@ -172,6 +145,8 @@ docker build --target "$agent" -t "$tag" \
   --label "org.agent-sandbox.git-dirty=$dirty" \
   --label "org.agent-sandbox.built-at=$created" .
 
-check=$(docker run --rm "$tag" "$agent" --version 2> /dev/null || true)
-printf '%s\n' "$check" | grep -F "$reported" > /dev/null || die "final image version verification failed"
+check=$(read_agent_version "$agent" "$tmp")
+[ "$check" = "$reported" ] || die "final image version $check does not match expected $reported"
+# Publish the local versioned tag only after verifying the final image exactly.
+docker tag "$tmp" "$tag"
 echo "Built $tag"

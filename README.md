@@ -33,6 +33,8 @@ Docker and Bash 3.2 or newer are required.
 
 Omitting `--version` installs the newest stable release. Images are tagged only as `agent-sandbox:<agent>-<version>`, with `-<suffix>` when supplied; no `latest` tag is created. Extra tools must be valid Debian package names, optionally version-pinned. The image records build, source, identity, base-image, package, agent, version, and suffix labels and verifies the installed CLI before tagging.
 
+Explicit versions must be valid SemVer, including optional prerelease identifiers and build metadata. Docker tags encode the metadata separator `+` as `_` (for example, `1.2.3+build.1` becomes `1.2.3_build.1`); image labels and `--version` selection retain the original version. Prereleases require an explicit version request. Final-image verification compares the complete parsed version, including prerelease and metadata, before assigning the versioned tag.
+
 ## Authenticate and run
 
 ```bash
