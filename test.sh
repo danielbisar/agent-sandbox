@@ -2,6 +2,7 @@
 set -eu
 
 root=$(cd "$(dirname "$0")" && pwd)
+. "$root/lib.sh"
 fail=0
 
 check() {
@@ -13,16 +14,33 @@ check() {
   fi
 }
 
+check_failure() {
+  expected_error=$1
+  shift
+  if failure_output=$("$@" 2>&1); then
+    echo "expected failure, but command succeeded: $*" >&2
+    return 1
+  fi
+  case "$failure_output" in
+    *"$expected_error"*)
+      ;;
+    *)
+      printf 'unexpected error: %s\n' "$failure_output" >&2
+      return 1
+      ;;
+  esac
+}
+
 if [ "${1:-}" = --integration ]; then
   shift
   only=
   if [ "${1:-}" = --agent ]; then
-    [ "$#" -ge 2 ] || {
-      echo 'error: --agent requires a value' >&2
-      exit 1
-    }
+    need_value "$@"
     only=$2
+    validate_agent "$only"
+    shift 2
   fi
+  [ "$#" -eq 0 ] || die "unknown integration argument: $1"
 
   for a in codex claude pi; do
     [ -z "$only" ] || [ "$only" = "$a" ] || continue
@@ -35,6 +53,11 @@ if [ "${1:-}" = --integration ]; then
 fi
 
 check bash -n "$root/build.sh" "$root/run.sh" "$root/auth.sh" "$root/lib.sh"
+check check_failure "--agent must be codex, claude, or pi" "$root/test.sh" --integration --agent invalid
+check check_failure "--agent must be codex, claude, or pi" "$root/test.sh" --integration --agent ''
+check check_failure "--agent requires a value" "$root/test.sh" --integration --agent
+check check_failure "unknown integration argument: --unknown" "$root/test.sh" --integration --unknown
+check check_failure "unknown integration argument: extra" "$root/test.sh" --integration --agent codex extra
 check sh -c "
   '$root/build.sh' --agent bad >/dev/null 2>&1
   test \$? -ne 0
