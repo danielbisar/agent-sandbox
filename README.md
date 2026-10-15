@@ -2,6 +2,22 @@
 
 Agent Sandbox builds local, non-root Docker images for exactly one of Codex, Claude, or Pi. All variants share Debian/Node tooling, `/home/agent/src` as their workspace, and `/home/agent/.agent-state` as persistent state.
 
+## Security and privacy disclaimer
+
+**This is a convenience environment, not a hardened sandbox for untrusted agents or agent-generated code.** Docker and Podman provide useful isolation, but ordinary Linux containers share the kernel of the machine running the container engine. Non-root execution reduces privileges; it does not eliminate container-escape risks. Docker Desktop runs its engine inside a VM, but that does not protect files and credentials explicitly shared with containers. See [Docker's security overview](https://docs.docker.com/engine/security/) and [bind-mount considerations](https://docs.docker.com/engine/storage/bind-mounts/#considerations-and-constraints).
+
+In this project:
+
+- Agents run with permission-bypass flags by default and can modify or delete files in the read-write workspace mount.
+- Agents can access mounted source code and persistent state, including credentials, subject to filesystem permissions. `--read-only` prevents workspace writes, not reading or disclosing its contents; persistent state remains writable.
+- `--safe` invokes the vendor CLI without the wrapper's permission-bypass flags. It does not add OS isolation or network restrictions, and vendor defaults are not a guarantee of safe behavior.
+
+**Container isolation does not prevent data leakage over the network.** These wrappers use Docker's default bridge network, which [allows outbound connections](https://docs.docker.com/engine/network/). There is no project-managed egress filtering. An agent or a command it executes can transmit accessible code or credentials to reachable destinations; legitimate model API requests can also send source code to the provider. Read-only mounts do not prevent this.
+
+For potentially hostile workloads, prefer a separately isolated, hardened VM or microVM environment, such as [Firecracker](https://github.com/firecracker-microvm/firecracker/blob/main/docs/design.md), with a separate guest kernel and hardware-backed virtualization boundary. This is stronger workload isolation, not an absolute security guarantee. **MicroVMs do not inherently prevent network exfiltration either:** Firecracker explicitly requires host-level filtering of untrusted guest egress. Minimize shared files and credentials, enforce network policy outside the agent's control, and account for data sent to allowed model endpoints. This project does not provision microVMs or enforce those policies.
+
+Use disposable workspaces and least-privilege credentials. Do not expose personal, employer, or customer data unless you are authorized to do so and the isolation, network controls, and provider data-handling terms meet your requirements.
+
 ## Build
 
 Docker and Bash 3.2 or newer are required.
