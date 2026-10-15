@@ -19,6 +19,53 @@ validate_agent() {
   esac
 }
 
+select_container_engine() {
+  case "${CONTAINER_ENGINE:-}" in
+    docker | podman)
+      container_engine=$CONTAINER_ENGINE
+      command -v "$container_engine" > /dev/null 2>&1 || die "$container_engine is not installed"
+      ;;
+    '')
+      if command -v docker > /dev/null 2>&1; then
+        container_engine=docker
+      elif command -v podman > /dev/null 2>&1; then
+        container_engine=podman
+      else
+        die "Docker or Podman is required"
+      fi
+      ;;
+    *)
+      die "CONTAINER_ENGINE must be docker or podman"
+      ;;
+  esac
+}
+
+prepare_run_options() {
+  local rootless
+  local uid
+  local gid
+  run_options=(-it --rm)
+  [ "$container_engine" = podman ] || return 0
+
+  rootless=$("$container_engine" info --format '{{.Host.Security.Rootless}}') || die "cannot inspect Podman rootless mode"
+  case "$rootless" in
+    true)
+      uid=$("$container_engine" image inspect --format '{{index .Config.Labels "org.agent-sandbox.uid"}}' "$image") || die "cannot inspect image UID"
+      gid=$("$container_engine" image inspect --format '{{index .Config.Labels "org.agent-sandbox.gid"}}' "$image") || die "cannot inspect image GID"
+      if printf '%s\n%s\n' "$uid" "$gid" | grep -Eqv '^[1-9][0-9]*$'; then
+        die "image UID and GID labels must be positive integers for rootless Podman"
+      fi
+      # Map the host owner to agent, preserving access to mode-0700 state without chown.
+      run_options+=("--userns=keep-id:uid=$uid,gid=$gid" "--user" agent)
+      ;;
+    false)
+      ;;
+    *)
+      die "unexpected Podman rootless mode: $rootless"
+      ;;
+  esac
+}
+
 is_valid_version() {
   case "$1" in
     *$'\n'* | *$'\r'*)
@@ -74,7 +121,7 @@ parse_agent_version() {
 read_agent_version() {
   local output
   local parsed
-  output=$(docker run --rm "$2" "$1" --version) || die "could not run $1 --version in image $2"
+  output=$("$container_engine" run --rm "$2" "$1" --version) || die "could not run $1 --version in image $2"
   parsed=$(parse_agent_version "$1" "$output") || die "could not determine installed $1 version in image $2: $output"
   printf '%s\n' "$parsed"
 }
@@ -97,16 +144,15 @@ select_image() {
   # These globals are initialized by each public wrapper before this function is called.
   # shellcheck disable=SC2154
   filter="label=org.agent-sandbox.agent=$agent"
-  refs=$(
-    docker image ls --format '{{.Repository}}:{{.Tag}}' --filter "$filter" 2> /dev/null |
-      grep '^agent-sandbox:' || true
-  )
+  refs=$("$container_engine" image ls --format '{{.Repository}}:{{.Tag}}' --filter "$filter") || die "$container_engine image discovery failed"
+  # Podman qualifies locally built image names with localhost/.
+  refs=$(printf '%s\n' "$refs" | grep -E '^(localhost/)?agent-sandbox:' || true)
   candidates=
   while IFS= read -r ref; do
     [ -n "$ref" ] || continue
-    a=$(docker image inspect --format '{{index .Config.Labels "org.agent-sandbox.agent"}}' "$ref" 2> /dev/null || true)
-    v=$(docker image inspect --format '{{index .Config.Labels "org.agent-sandbox.version"}}' "$ref" 2> /dev/null || true)
-    s=$(docker image inspect --format '{{index .Config.Labels "org.agent-sandbox.suffix"}}' "$ref" 2> /dev/null || true)
+    a=$("$container_engine" image inspect --format '{{index .Config.Labels "org.agent-sandbox.agent"}}' "$ref") || die "cannot inspect image agent: $ref"
+    v=$("$container_engine" image inspect --format '{{index .Config.Labels "org.agent-sandbox.version"}}' "$ref") || die "cannot inspect image version: $ref"
+    s=$("$container_engine" image inspect --format '{{index .Config.Labels "org.agent-sandbox.suffix"}}' "$ref") || die "cannot inspect image suffix: $ref"
     [ "$a" = "$agent" ] || continue
     if ! is_valid_version "$v"; then
       printf 'warning: ignoring image %s with invalid version label: %s\n' "$ref" "$v" >&2
@@ -152,7 +198,7 @@ EOF
   ')
 
   [ -n "$chosen" ] || {
-    cmd="./build.sh --agent $agent${requested_version:+ --version $requested_version}"
+    cmd="CONTAINER_ENGINE=$container_engine ./build.sh --agent $agent${requested_version:+ --version $requested_version}"
     [ "$suffix_set" = false ] || cmd="$cmd --suffix $suffix"
     die "no matching image; build it with: $cmd"
   }

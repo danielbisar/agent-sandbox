@@ -2,7 +2,9 @@
 
 ## Project Structure & Architecture
 
-This repository builds mutually exclusive Codex, Claude, and Pi Docker image variants from one multi-stage `Dockerfile`. Keep shared shell logic in `lib.sh`; `build.sh`, `run.sh`, and `auth.sh` are the Bash 3.2-compatible public interfaces. `test.sh` contains dependency-free checks plus optional Docker integration tests. User documentation belongs in `README.md`, with longer design notes under `docs/`.
+This repository builds mutually exclusive Codex, Claude, and Pi container image variants with Docker or Podman from one multi-stage `Dockerfile`. Keep shared shell logic in `lib.sh`; `build.sh`, `run.sh`, and `auth.sh` are the Bash 3.2-compatible public interfaces. `test.sh` contains dependency-free checks plus optional container integration tests. User documentation belongs in `README.md`, with longer design notes under `docs/`.
+
+Use the shared container-engine selection helper for all engine commands. Prefer Docker when both engines are installed, honor `CONTAINER_ENGINE=docker|podman`, and never silently switch after an engine failure. Preserve rootless Podman's host-to-agent UID/GID mapping for workspace and state mounts.
 
 Preserve the runtime contract: containers use the non-root `agent` identity, `/home/agent/src` as the workspace, and `/home/agent/.agent-state` for persistent state. Do not create moving image tags or trigger builds from runtime scripts. Retain label validation, exact installed-version verification, and the allowlist-based `.dockerignore`.
 

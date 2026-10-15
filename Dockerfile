@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-ARG BASE_IMAGE=node:24-slim
+ARG BASE_IMAGE=docker.io/library/node:24-slim
 FROM ${BASE_IMAGE} AS common
 
 ARG AGENT_UID=1000

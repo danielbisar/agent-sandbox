@@ -59,9 +59,11 @@ while [ "$#" -gt 0 ]; do
 done
 
 validate_agent "$agent"
+select_container_engine
 state=${state:-$script_dir/state/$agent}
 state_dir=$(prepare_state "$state")
 select_image
+prepare_run_options
 
 z=
 [ "$selinux" = false ] || z=,Z
@@ -79,4 +81,5 @@ case "$agent" in
     ;;
 esac
 
-exec docker run -it --rm -v "$state_dir:/home/agent/.agent-state:rw$z" "$image" "${cmd[@]}" "${forwarded[@]}"
+[ "${#forwarded[@]}" -eq 0 ] || cmd+=("${forwarded[@]}")
+exec "$container_engine" run "${run_options[@]}" -v "$state_dir:/home/agent/.agent-state:rw$z" "$image" "${cmd[@]}"

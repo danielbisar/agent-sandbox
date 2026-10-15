@@ -1,6 +1,6 @@
 # Agent Sandbox
 
-Agent Sandbox builds local, non-root Docker images for exactly one of Codex, Claude, or Pi. All variants share Debian/Node tooling, `/home/agent/src` as their workspace, and `/home/agent/.agent-state` as persistent state.
+Agent Sandbox builds local, non-root container images with Docker or Podman for exactly one of Codex, Claude, or Pi. All variants share Debian/Node tooling, `/home/agent/src` as their workspace, and `/home/agent/.agent-state` as persistent state.
 
 ## Security and privacy disclaimer
 
@@ -12,7 +12,7 @@ In this project:
 - Agents can access mounted source code and persistent state, including credentials, subject to filesystem permissions. `--read-only` prevents workspace writes, not reading or disclosing its contents; persistent state remains writable.
 - `--safe` invokes the vendor CLI without the wrapper's permission-bypass flags. It does not add OS isolation or network restrictions, and vendor defaults are not a guarantee of safe behavior.
 
-**Container isolation does not prevent data leakage over the network.** These wrappers use Docker's default bridge network, which [allows outbound connections](https://docs.docker.com/engine/network/). There is no project-managed egress filtering. An agent or a command it executes can transmit accessible code or credentials to reachable destinations; legitimate model API requests can also send source code to the provider. Read-only mounts do not prevent this.
+**Container isolation does not prevent data leakage over the network.** These wrappers use the selected engine's default networking, normally allowing outbound connections; see [Docker networking](https://docs.docker.com/engine/network/) and [Podman networking](https://docs.podman.io/en/latest/markdown/podman-run.1.html#network-mode-net). There is no project-managed egress filtering. An agent or a command it executes can transmit accessible code or credentials to reachable destinations; legitimate model API requests can also send source code to the provider. Read-only mounts do not prevent this.
 
 **Telemetry and provider data handling remain vendor-controlled.** The images configure update-check or auto-update disabling, but the wrappers do not configure telemetry, analytics, or error-reporting opt-outs. Their behavior depends on the installed agent version, its configuration, and your account or organization policies. Neither `--safe` nor `--read-only` disables those features. Review and configure the vendor's privacy settings separately; running a CLI locally in a container does not mean its processing or data storage is local-only.
 
@@ -22,12 +22,14 @@ Use disposable workspaces and least-privilege credentials. Do not expose persona
 
 ## Build
 
-Docker and Bash 3.2 or newer are required.
+Docker or Podman, and Bash 3.2 or newer, are required. The wrappers prefer Docker when both commands are installed, otherwise use Podman. Set `CONTAINER_ENGINE=docker` or `CONTAINER_ENGINE=podman` to choose explicitly; a selected engine's failure is reported rather than silently switching engines. Images must be built and launched using the same engine's image store.
+
+The default base image is `docker.io/library/node:24-slim`, explicitly qualified to avoid Podman short-name registry prompts. Rootless Podman launches map the host user to the image's labeled agent UID/GID using `--userns=keep-id:uid=...,gid=...` and explicitly run as `agent`. This preserves access to host-owned workspaces and private state without changing their ownership. Your Podman installation must support these options and have working subordinate UID/GID mappings. For rootful Docker or Podman on Linux, use `--uid`/`--gid` at build time to match host ownership where needed. Rootless Docker's UID/GID mapping is not configured by these wrappers.
 
 ```bash
 ./build.sh --agent codex
 ./build.sh --agent claude --version 1.2.3 --no-pull
-./build.sh --agent pi --base-image node:24-slim --uid 1000 --gid 1000 \
+./build.sh --agent pi --base-image docker.io/library/node:24-slim --uid 1000 --gid 1000 \
   --tools "make,gcc" --tools "make,zip=3.0-13" --suffix dev
 ```
 
@@ -44,7 +46,7 @@ Explicit versions must be valid SemVer, including optional prerelease identifier
 ./run.sh --agent pi --shell . -- -lc 'git status'
 ```
 
-Both commands select the highest stable, unsuffixed local image unless `--version` or `--suffix` narrows selection. They validate image labels and print the exact build command when none matches. Relative paths are resolved from the caller's directory. Containers are interactive, disposable, and use Docker's normal bridge network.
+Both commands select the highest stable, unsuffixed local image unless `--version` or `--suffix` narrows selection. They validate image labels and print the exact build command when none matches. Relative paths are resolved from the caller's directory. Containers are interactive, disposable, and use the selected engine's default networking.
 
 State defaults to `state/<agent>` or can be selected directly with `--state-dir PATH`. Missing directories are created mode 0700. Authentication is not required before normal launch. Codex authentication uses device login; Claude and Pi start their interactive provider setup. State can be shared by concurrent containers, so applications—not these wrappers—coordinate writes. Treat state as secret and never commit it.
 

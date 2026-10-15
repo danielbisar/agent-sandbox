@@ -6,7 +6,7 @@ script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 agent=''
 version=latest
-base_image=node:24-slim
+base_image=docker.io/library/node:24-slim
 pull=true
 uid=1000
 gid=1000
@@ -101,12 +101,13 @@ if [ "${#tools[@]}" -gt 0 ]; then
 fi
 IFS=$old_ifs
 
-[ "$pull" = false ] || docker pull "$base_image"
+select_container_engine
+[ "$pull" = false ] || "$container_engine" pull "$base_image"
 
 # Resolve an unpinned request in a temporary image before building the versioned image.
 tmp="agent-sandbox-build-$$"
-trap 'docker image rm -f "$tmp" >/dev/null 2>&1 || true' EXIT INT TERM
-docker build --target "$agent" -t "$tmp" \
+trap '"$container_engine" image rm -f "$tmp" >/dev/null 2>&1 || true' EXIT INT TERM
+"$container_engine" build --target "$agent" -t "$tmp" \
   --build-arg "BASE_IMAGE=$base_image" \
   --build-arg "AGENT_VERSION=$version" \
   --build-arg "AGENT_UID=$uid" \
@@ -128,7 +129,7 @@ commit=$(git rev-parse HEAD 2> /dev/null || echo unknown)
 dirty=false
 [ -z "$(git status --porcelain 2> /dev/null)" ] || dirty=true
 created=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-docker build --target "$agent" -t "$tmp" \
+"$container_engine" build --target "$agent" -t "$tmp" \
   --build-arg "BASE_IMAGE=$base_image" \
   --build-arg "AGENT_VERSION=$reported" \
   --build-arg "AGENT_UID=$uid" \
@@ -148,5 +149,5 @@ docker build --target "$agent" -t "$tmp" \
 check=$(read_agent_version "$agent" "$tmp")
 [ "$check" = "$reported" ] || die "final image version $check does not match expected $reported"
 # Publish the local versioned tag only after verifying the final image exactly.
-docker tag "$tmp" "$tag"
+"$container_engine" tag "$tmp" "$tag"
 echo "Built $tag"

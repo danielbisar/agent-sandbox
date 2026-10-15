@@ -42,12 +42,16 @@ if [ "${1:-}" = --integration ]; then
   fi
   [ "$#" -eq 0 ] || die "unknown integration argument: $1"
 
+  # Smoke tests must not mount the user's real authentication state.
+  integration_state=$(mktemp -d "${TMPDIR:-/tmp}/agent-sandbox-integration.XXXXXX")
+  trap 'rmdir "$integration_state/skills" "$integration_state"' EXIT
+  mkdir "$integration_state/skills"
   for a in codex claude pi; do
     [ -z "$only" ] || [ "$only" = "$a" ] || continue
     "$root/build.sh" --agent "$a"
     # The command substitution intentionally runs inside the container shell.
     # shellcheck disable=SC2016
-    "$root/run.sh" --agent "$a" --shell "$root" -- -lc 'test "$(id -u)" != 0 && command -v git && command -v rg && command -v fdfind && command -v jq'
+    "$root/run.sh" --agent "$a" --state-dir "$integration_state" --shell "$root" -- -lc 'test "$(id -u)" != 0 && command -v git && command -v rg && command -v fdfind && command -v jq'
   done
   exit 0
 fi
@@ -86,8 +90,8 @@ check sh -c "
 # Capture Docker's launch arguments without a daemon or installed agent CLIs.
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/agent-sandbox-test.XXXXXX")
 trap '
-  rm -f "$tmp/docker" "$tmp/actual" "$tmp/expected" "$tmp/docker-log" "$tmp/version-count"
-  rmdir "$tmp/state/skills" "$tmp/state" "$tmp"
+  rm -f "$tmp/docker" "$tmp/podman" "$tmp/podman-bin/podman" "$tmp/actual" "$tmp/expected" "$tmp/docker-log" "$tmp/version-count" "$tmp/run-options" "$tmp/engine-log"
+  rmdir "$tmp/state/skills" "$tmp/state" "$tmp/podman-bin" "$tmp"
 ' EXIT
 cat > "$tmp/docker" << 'EOF'
 #!/bin/bash
@@ -96,12 +100,20 @@ set -eu
 if [ -n "${TEST_DOCKER_LOG:-}" ]; then
   printf '%s\n' "$*" >> "$TEST_DOCKER_LOG"
 fi
+engine_name=$(basename "$0")
+if [ -n "${TEST_ENGINE_LOG:-}" ]; then
+  printf '%s\n' "$engine_name" >> "$TEST_ENGINE_LOG"
+fi
 label_version=${TEST_LABEL_VERSION-1.2.3}
 image_version=${label_version//+/_}
+image_prefix=''
+[ "$engine_name" != podman ] || image_prefix=localhost/
+image_ref="$image_prefix""agent-sandbox:$TEST_AGENT-$image_version"
 
 case "$1 $2" in
   "image ls")
-    printf 'agent-sandbox:%s-%s\n' "$TEST_AGENT" "$image_version"
+    printf '%s\n' "$image_ref"
+    exit "${TEST_DISCOVERY_STATUS:-0}"
     ;;
   "image inspect")
     case "$*" in
@@ -114,6 +126,12 @@ case "$1 $2" in
       *org.agent-sandbox.suffix*)
         printf '\n'
         ;;
+      *org.agent-sandbox.uid*)
+        printf '%s\n' "${TEST_IMAGE_UID-1000}"
+        ;;
+      *org.agent-sandbox.gid*)
+        printf '%s\n' "${TEST_IMAGE_GID-1000}"
+        ;;
       *)
         echo "unexpected image inspection: $*" >&2
         exit 1
@@ -121,7 +139,10 @@ case "$1 $2" in
     esac
     ;;
   "run -it")
-    while [ "$#" -gt 0 ] && [ "$1" != "agent-sandbox:$TEST_AGENT-$image_version" ]; do
+    if [ -n "${TEST_RUN_OPTIONS_FILE:-}" ]; then
+      printf '%s\n' "$@" > "$TEST_RUN_OPTIONS_FILE"
+    fi
+    while [ "$#" -gt 0 ] && [ "$1" != "$image_ref" ]; do
       shift
     done
     [ "$#" -gt 0 ] || {
@@ -132,6 +153,10 @@ case "$1 $2" in
     printf '%s\n' "$@" > "$TEST_COMMAND_FILE"
     ;;
   "build --target" | "image rm" | "tag "*)
+    ;;
+  "info --format")
+    printf '%s\n' "${TEST_ROOTLESS:-true}"
+    exit "${TEST_INFO_STATUS:-0}"
     ;;
   "run --rm")
     run_count=0
@@ -152,12 +177,16 @@ case "$1 $2" in
 esac
 EOF
 chmod +x "$tmp/docker"
+cp "$tmp/docker" "$tmp/podman"
+mkdir "$tmp/podman-bin"
+ln -s "$tmp/podman" "$tmp/podman-bin/podman"
 
 check_launch() {
   test_agent=$1
   shift
   TEST_AGENT="$test_agent" \
     TEST_COMMAND_FILE="$tmp/actual" \
+    CONTAINER_ENGINE="${TEST_ENGINE:-docker}" \
     PATH="$tmp:$PATH" \
     "$root/run.sh" --agent "$test_agent" --state-dir "$tmp/state" "$root" "$@" &&
     diff -u "$tmp/expected" "$tmp/actual"
@@ -237,6 +266,7 @@ run_build() {
     TEST_FINAL_OUTPUT="$final_output" \
     TEST_DOCKER_LOG="$tmp/docker-log" \
     TEST_VERSION_COUNT="$tmp/version-count" \
+    CONTAINER_ENGINE="${TEST_ENGINE:-docker}" \
     PATH="$tmp:$PATH" \
     "$root/build.sh" --agent "$build_agent" --no-pull "$@"
 }
@@ -289,6 +319,7 @@ check check_build_failure "could not determine installed pi version" run_build p
 TEST_FINAL_STATUS=1 check check_build_failure "could not run pi --version" run_build pi 1.2.3 1.2.3
 
 check_selection() (
+  local container_engine="$tmp/docker"
   agent=codex
   requested_version=$2
   suffix=''
@@ -296,9 +327,6 @@ check_selection() (
   TEST_AGENT=codex
   TEST_LABEL_VERSION=$1
   export TEST_AGENT TEST_LABEL_VERSION
-  docker() {
-    "$tmp/docker" "$@"
-  }
   select_image
   [ "$selected_version" = "$3" ]
 )
@@ -311,5 +339,88 @@ check check_failure "invalid version label: nonsense" check_selection nonsense '
 check check_failure "invalid version label: 01.2.3" check_selection 01.2.3 '' ''
 check check_failure "invalid version label:" check_selection '' '' ''
 check check_failure "invalid semantic version: nonsense" check_selection 1.2.3 nonsense ''
+
+check_engine_selection() {
+  local CONTAINER_ENGINE=$1
+  local PATH=$2
+  local container_engine=''
+  select_container_engine
+  [ "$container_engine" = "$3" ]
+}
+
+check check_engine_selection '' "$tmp" docker
+check check_engine_selection '' "$tmp/podman-bin" podman
+check check_engine_selection podman "$tmp" podman
+check check_engine_selection docker "$tmp" docker
+check check_failure "Docker or Podman is required" check_engine_selection '' "$tmp/no-engines" ''
+check check_failure "docker is not installed" check_engine_selection docker "$tmp/podman-bin" ''
+check check_failure "CONTAINER_ENGINE must be docker or podman" check_engine_selection invalid "$tmp" ''
+
+check_podman_launch() {
+  printf '%s\n' "$1" --model 'model with spaces' > "$tmp/expected"
+  TEST_ENGINE=podman \
+    TEST_IMAGE_UID="$2" \
+    TEST_IMAGE_GID="$3" \
+    TEST_ROOTLESS="$4" \
+    TEST_RUN_OPTIONS_FILE="$tmp/run-options" \
+    check_launch "$1" --safe -- --model 'model with spaces' || return 1
+  if [ "$4" = true ]; then
+    grep -Fqx -- "--userns=keep-id:uid=$2,gid=$3" "$tmp/run-options" &&
+      grep -Fqx -- "--user" "$tmp/run-options"
+  else
+    if grep -q -- '--userns=' "$tmp/run-options"; then
+      echo "unexpected user namespace mapping for rootful Podman" >&2
+      return 1
+    fi
+  fi
+}
+
+for a in codex claude pi; do
+  check check_podman_launch "$a" 1000 1000 true
+done
+check check_podman_launch codex 2000 3000 true
+check check_podman_launch codex 1000 1000 false
+TEST_INFO_STATUS=1 check check_failure "cannot inspect Podman rootless mode" check_podman_launch codex 1000 1000 true
+check check_failure "image UID and GID labels must be positive integers" check_podman_launch codex '' 1000 true
+check check_failure "image UID and GID labels must be positive integers" check_podman_launch codex 0 1000 true
+check check_failure "unexpected Podman rootless mode" check_podman_launch codex 1000 1000 unexpected
+TEST_ENGINE=podman TEST_DISCOVERY_STATUS=1 check check_failure "podman image discovery failed" check_launch codex --safe
+
+check_auth() {
+  local auth_engine=$1
+  local auth_agent=$2
+  case "$auth_agent" in
+    codex)
+      printf '%s\n' codex login --device-auth --example 'value with spaces' > "$tmp/expected"
+      ;;
+    *)
+      printf '%s\n' "$auth_agent" --example 'value with spaces' > "$tmp/expected"
+      ;;
+  esac
+  TEST_AGENT="$auth_agent" \
+    TEST_COMMAND_FILE="$tmp/actual" \
+    CONTAINER_ENGINE="$auth_engine" \
+    PATH="$tmp:$PATH" \
+    "$root/auth.sh" --agent "$auth_agent" --state-dir "$tmp/state" -- --example 'value with spaces' &&
+    diff -u "$tmp/expected" "$tmp/actual"
+}
+
+for engine in docker podman; do
+  for a in codex claude pi; do
+    check check_auth "$engine" "$a"
+  done
+done
+
+check_podman_build() {
+  : > "$tmp/engine-log"
+  TEST_ENGINE=podman \
+    TEST_ENGINE_LOG="$tmp/engine-log" \
+    check_build pi 12.34.56 12.34.56 12.34.56 agent-sandbox:pi-12.34.56 || return 1
+  if grep -qv '^podman$' "$tmp/engine-log"; then
+    echo "Podman build invoked another engine" >&2
+    return 1
+  fi
+}
+check check_podman_build
 
 [ "$fail" -eq 0 ]

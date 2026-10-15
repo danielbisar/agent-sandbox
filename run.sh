@@ -108,13 +108,15 @@ validate_agent "$agent"
 }
 [ -z "$extensions" ] || [ "$agent" = pi ] || die "extensions are supported only for pi"
 
+select_container_engine
 workspace=$(absolute_dir "$workspace")
 state=${state:-$script_dir/state/$agent}
 state_dir=$(prepare_state "$state")
 mkdir -p "$state_dir/skills"
 select_image
+prepare_run_options
 
-# Docker's private SELinux relabeling suffix applies to every managed mount.
+# Private SELinux relabeling applies to every managed mount.
 z=
 [ "$selinux" = false ] || z=,Z
 wm=rw
@@ -155,4 +157,4 @@ else
 fi
 [ "${#forwarded[@]}" -eq 0 ] || cmd+=("${forwarded[@]}")
 
-exec docker run -it --rm "${mounts[@]}" "$image" "${cmd[@]}"
+exec "$container_engine" run "${run_options[@]}" "${mounts[@]}" "$image" "${cmd[@]}"
