@@ -20,11 +20,16 @@ workspace=$(absolute_dir "$workspace"); state=${state:-$script_dir/state/$agent}
 select_image
 z=; [ "$selinux" = false ] || z=,Z; wm=rw; [ "$read_only" = false ] || wm=ro
 mounts=("-v" "$state_dir:/home/agent/.agent-state:rw$z" "-v" "$workspace:/home/agent/src:$wm$z"); skill_names=
-add_skill_mounts "ro$z" "${skills_ro[@]}"; add_skill_mounts "rw$z" "${skills_rw[@]}"
+[ "${#skills_ro[@]}" -eq 0 ] || add_skill_mounts "ro$z" "${skills_ro[@]}"
+[ "${#skills_rw[@]}" -eq 0 ] || add_skill_mounts "rw$z" "${skills_rw[@]}"
 if [ -n "$extensions" ]; then ext=$(absolute_dir "$extensions"); mounts+=("-v" "$ext:/home/agent/.agent-state/extensions:$extensions_mode$z"); fi
 cmd=()
-if [ "$shell" = true ]; then cmd=(/bin/bash "${forwarded[@]}"); else
- case "$agent" in codex) [ "$safe" = true ] || cmd=(codex --sandbox danger-full-access --ask-for-approval never);; claude) [ "$safe" = true ] || cmd=(claude --dangerously-skip-permissions);; pi) [ "$safe" = true ] || cmd=(pi --yolo);; esac
- cmd+=("${forwarded[@]}")
+if [ "$shell" = true ]; then cmd=(/bin/bash); else
+ if [ "$safe" = true ]; then
+  cmd=("$agent")
+ else
+  case "$agent" in codex) cmd=(codex --sandbox danger-full-access --ask-for-approval never);; claude) cmd=(claude --dangerously-skip-permissions);; pi) cmd=(pi --yolo);; esac
+ fi
 fi
+[ "${#forwarded[@]}" -eq 0 ] || cmd+=("${forwarded[@]}")
 exec docker run -it --rm "${mounts[@]}" "$image" "${cmd[@]}"
