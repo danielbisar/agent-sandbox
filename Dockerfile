@@ -1,12 +1,21 @@
 # syntax=docker/dockerfile:1
 ARG BASE_IMAGE=docker.io/library/node:24-slim
-FROM ${BASE_IMAGE} AS common
+ARG TRUST_STAGE=base
+FROM ${BASE_IMAGE} AS base
+
+FROM base AS custom-ca
+COPY ca-certificates/ /usr/local/share/ca-certificates/agent-sandbox/
+# Node may use bundled roots; add the updated system bundle without replacing them.
+ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
+
+FROM ${TRUST_STAGE} AS common
 
 ARG AGENT_UID=1000
 ARG AGENT_GID=1000
 ARG EXTRA_PACKAGES=""
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl git ripgrep fd-find jq ${EXTRA_PACKAGES} \
+ && update-ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
  && if getent passwd node >/dev/null; then userdel --remove node; fi \
  && groupadd --gid "${AGENT_GID}" agent \

@@ -19,6 +19,37 @@ validate_agent() {
   esac
 }
 
+validate_ca_cert() {
+  local details
+  [ -f "$1" ] && [ -r "$1" ] && [ -s "$1" ] || die "CA certificate must be a readable, nonempty regular file: $1"
+  # Reject extra PEM objects (especially private keys), bundles, and trailing material.
+  awk '
+    { sub(/\r$/, "") }
+    $0 == "-----BEGIN CERTIFICATE-----" {
+      if (state != 0) exit 1
+      state = 1
+      next
+    }
+    $0 == "-----END CERTIFICATE-----" {
+      if (state != 1) exit 1
+      state = 2
+      next
+    }
+    /^[[:space:]]*$/ { next }
+    state == 1 && /^[A-Za-z0-9+\/=]+$/ { next }
+    { exit 1 }
+    END { if (state != 2) exit 1 }
+  ' "$1" || die "expected exactly one PEM certificate and no private key or other material: $1"
+  details=$(openssl x509 -in "$1" -noout -text) || die "invalid X.509 CA certificate: $1"
+  printf '%s\n' "$details" | awk '
+    /^[[:space:]]*X509v3 Basic Constraints:/ {
+      getline
+      if ($0 ~ /CA:TRUE([,[:space:]]|$)/) found = 1
+    }
+    END { exit !found }
+  ' || die "certificate is not a CA (CA:TRUE required): $1"
+}
+
 select_container_engine() {
   case "${CONTAINER_ENGINE:-}" in
     docker | podman)

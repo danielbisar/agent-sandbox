@@ -37,6 +37,22 @@ Omitting `--version` installs the newest stable release. Images are tagged only 
 
 Explicit versions must be valid SemVer, including optional prerelease identifiers and build metadata. Docker tags encode the metadata separator `+` as `_` (for example, `1.2.3+build.1` becomes `1.2.3_build.1`); image labels and `--version` selection retain the original version. Prereleases require an explicit version request. Final-image verification compares the complete parsed version, including prerelease and metadata, before assigning the versioned tag.
 
+### Custom CA certificates
+
+For a company HTTPS proxy or private CA, pass one PEM-encoded public CA certificate per file. Repeat `--ca-cert` for additional CAs; paths are relative to your current directory. This option requires OpenSSL on the host.
+
+```bash
+./build.sh --agent codex --ca-cert ~/certificates/company-root.crt --suffix company
+./auth.sh --agent codex --suffix company
+./run.sh --agent codex --suffix company /path/to/project
+```
+
+The build validates each certificate, rejects private keys and certificate bundles, and copies only the selected certificates and Dockerfile into a temporary allowlisted context. Certificates are installed into the image's system trust store before agent installation. `NODE_EXTRA_CA_CERTS` also extends Node's trust using the system bundle. No certificate argument is needed at runtime. Rebuild with replacement certificates when trust changes; certificate contents participate in build caching. Without `--ca-cert`, no additional CA trust is configured.
+
+Only supply CAs you are authorized to trust: a trusted interception CA can authorize certificates for intercepted HTTPS connections. Certificates remain in the image and build cache and may disclose organizational information; do not distribute customized images without permission. Never supply a private key. This does not support mutual-TLS client authentication, disable TLS verification, or guarantee that every vendor binary or extension uses the configured trust stores.
+
+This option configures **image trust, not engine/host trust**. If pulling the base image fails TLS validation, configure Docker/Podman trust separately. Installing the system CA tooling also requires working apt access in the base image; custom bases using HTTPS-only repositories may need CA trust bootstrapped in advance.
+
 ## Authenticate and run
 
 ```bash
@@ -60,9 +76,10 @@ Repeat `--skills PATH` or `--skills-rw PATH` to mount skill directories beneath 
 ./test.sh
 ./test.sh --integration
 ./test.sh --integration --agent codex
+./test-ca.sh --integration
 ```
 
-Fast tests require no dependencies. Integration builds and smoke-tests images. Authentication persistence is manual: authenticate, exit, rerun authentication with the same state directory, and confirm credentials remain available.
+Fast tests require no additional dependencies; CA validation/context tests run when OpenSSL is available. The optional CA integration test requires OpenSSL, Python 3, and a local Linux container engine with host networking. It creates disposable certificates and a loopback HTTPS server, verifies system and Node trust as `agent`, and checks that replacing the CA invalidates cached trust. It does not use real authentication state. Agent integration builds and smoke-tests images. Authentication persistence is manual: authenticate, exit, rerun authentication with the same state directory, and confirm credentials remain available.
 
 ## License and third-party software
 

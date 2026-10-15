@@ -56,7 +56,7 @@ if [ "${1:-}" = --integration ]; then
   exit 0
 fi
 
-check bash -n "$root/build.sh" "$root/run.sh" "$root/auth.sh" "$root/lib.sh"
+check bash -n "$root/build.sh" "$root/run.sh" "$root/auth.sh" "$root/lib.sh" "$root/test-ca.sh"
 check check_failure "--agent must be codex, claude, or pi" "$root/test.sh" --integration --agent invalid
 check check_failure "--agent must be codex, claude, or pi" "$root/test.sh" --integration --agent ''
 check check_failure "--agent requires a value" "$root/test.sh" --integration --agent
@@ -422,5 +422,11 @@ check_podman_build() {
   fi
 }
 check check_podman_build
+
+if command -v openssl > /dev/null 2>&1; then
+  check "$root/test-ca.sh"
+else
+  printf 'skip - CA tests require OpenSSL\n'
+fi
 
 [ "$fail" -eq 0 ]

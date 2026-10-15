@@ -8,10 +8,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - run: bash -n build.sh run.sh auth.sh lib.sh test.sh
+      - run: bash -n build.sh run.sh auth.sh lib.sh test.sh test-ca.sh
       - run: ./test.sh
       - name: Install ShellCheck on macOS
         if: runner.os == 'macOS'
         run: brew install shellcheck
       - name: ShellCheck
-        run: shellcheck build.sh run.sh auth.sh lib.sh test.sh
+        run: shellcheck build.sh run.sh auth.sh lib.sh test.sh test-ca.sh

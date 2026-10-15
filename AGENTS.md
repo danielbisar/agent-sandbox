@@ -8,16 +8,19 @@ Use the shared container-engine selection helper for all engine commands. Prefer
 
 Preserve the runtime contract: containers use the non-root `agent` identity, `/home/agent/src` as the workspace, and `/home/agent/.agent-state` for persistent state. Do not create moving image tags or trigger builds from runtime scripts. Retain label validation, exact installed-version verification, and the allowlist-based `.dockerignore`.
 
+Custom CA builds use a temporary allowlisted context containing only the Dockerfile and explicitly selected public CA certificates. Never include private keys, caller certificate paths, or unrelated checkout contents in images or metadata. Preserve TLS verification and both system and Node trust configuration.
+
 ## Build, Test, and Development Commands
 
 - `./build.sh --agent codex` builds one agent-specific image; substitute `claude` or `pi`.
 - `./run.sh --agent codex .` launches a built image with the current workspace.
 - `./auth.sh --agent codex` initializes credentials in persistent state.
-- `bash -n build.sh run.sh auth.sh lib.sh test.sh` checks shell syntax.
+- `bash -n build.sh run.sh auth.sh lib.sh test.sh test-ca.sh` checks shell syntax.
 - `./test.sh` runs fast checks without Docker.
 - `./test.sh --integration --agent codex` builds and smoke-tests one variant; omit `--agent` to test all variants.
-- `shellcheck build.sh run.sh auth.sh lib.sh test.sh` performs static analysis.
-- `shfmt -i 2 -ci -sr -w build.sh run.sh auth.sh lib.sh test.sh` formats all shell scripts; replace `-w` with `-d` to check formatting without modifying files.
+- `./test-ca.sh` checks CA validation and isolated build contexts with OpenSSL; add `--integration` to verify system/Node HTTPS trust using a disposable local CA and server.
+- `shellcheck build.sh run.sh auth.sh lib.sh test.sh test-ca.sh` performs static analysis.
+- `shfmt -i 2 -ci -sr -w build.sh run.sh auth.sh lib.sh test.sh test-ca.sh` formats all shell scripts; replace `-w` with `-d` to check formatting without modifying files.
 
 ## Coding Style & Naming Conventions
 

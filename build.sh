@@ -12,9 +12,32 @@ uid=1000
 gid=1000
 suffix=''
 tools=()
+ca_certs=()
+build_context=.
+trust_stage=base
+tmp=''
+context_dir=''
+
+cleanup() {
+  if [ -n "$tmp" ]; then
+    "$container_engine" image rm -f "$tmp" > /dev/null 2>&1 || true
+  fi
+  if [ -n "$context_dir" ]; then
+    # Only generated files in the private context are removed, never caller inputs.
+    for cert in "$context_dir"/ca-certificates/*.crt; do
+      [ ! -f "$cert" ] || rm -f "$cert"
+    done
+    rm -f "$context_dir/Dockerfile" "$context_dir/.dockerignore"
+    rmdir "$context_dir/ca-certificates" "$context_dir"
+  fi
+}
+
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 usage() {
-  echo "Usage: $0 --agent codex|claude|pi [--version VERSION] [--base-image IMAGE] [--no-pull] [--uid UID] [--gid GID] [--tools pkg1,pkg2] [--suffix VALUE]" >&2
+  echo "Usage: $0 --agent codex|claude|pi [--version VERSION] [--base-image IMAGE] [--no-pull] [--uid UID] [--gid GID] [--tools pkg1,pkg2] [--ca-cert PATH] [--suffix VALUE]" >&2
 }
 
 while [ "$#" -gt 0 ]; do
@@ -55,6 +78,11 @@ while [ "$#" -gt 0 ]; do
     --suffix)
       need_value "$@"
       suffix=$2
+      shift
+      ;;
+    --ca-cert)
+      need_value "$@"
+      ca_certs+=("$2")
       shift
       ;;
     -h | --help)
@@ -101,18 +129,37 @@ if [ "${#tools[@]}" -gt 0 ]; then
 fi
 IFS=$old_ifs
 
+# Keep external certificates and the rest of the checkout out of the normal context.
+if [ "${#ca_certs[@]}" -gt 0 ]; then
+  command -v openssl > /dev/null 2>&1 || die "--ca-cert requires OpenSSL"
+  context_dir=$(mktemp -d "${TMPDIR:-/tmp}/agent-sandbox-context.XXXXXX")
+  mkdir "$context_dir/ca-certificates"
+  cp "$script_dir/Dockerfile" "$context_dir/Dockerfile"
+  printf '%s\n' '**' '!Dockerfile' '!ca-certificates/' '!ca-certificates/*.crt' > "$context_dir/.dockerignore"
+  cert_index=0
+  for cert in "${ca_certs[@]}"; do
+    validate_ca_cert "$cert"
+    cert_index=$((cert_index + 1))
+    # Normalize PEM encoding and filenames; never embed the caller's path.
+    openssl x509 -in "$cert" -out "$context_dir/ca-certificates/ca-$cert_index.crt" ||
+      die "cannot prepare CA certificate: $cert"
+  done
+  build_context=$context_dir
+  trust_stage=custom-ca
+fi
+
 select_container_engine
 [ "$pull" = false ] || "$container_engine" pull "$base_image"
 
 # Resolve an unpinned request in a temporary image before building the versioned image.
 tmp="agent-sandbox-build-$$"
-trap '"$container_engine" image rm -f "$tmp" >/dev/null 2>&1 || true' EXIT INT TERM
 "$container_engine" build --target "$agent" -t "$tmp" \
+  --build-arg "TRUST_STAGE=$trust_stage" \
   --build-arg "BASE_IMAGE=$base_image" \
   --build-arg "AGENT_VERSION=$version" \
   --build-arg "AGENT_UID=$uid" \
   --build-arg "AGENT_GID=$gid" \
-  --build-arg "EXTRA_PACKAGES=$packages" .
+  --build-arg "EXTRA_PACKAGES=$packages" "$build_context"
 
 reported=$(read_agent_version "$agent" "$tmp")
 [ "$version" = latest ] || [ "$reported" = "$version" ] || die "installed version $reported does not match requested $version"
@@ -130,6 +177,7 @@ dirty=false
 [ -z "$(git status --porcelain 2> /dev/null)" ] || dirty=true
 created=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 "$container_engine" build --target "$agent" -t "$tmp" \
+  --build-arg "TRUST_STAGE=$trust_stage" \
   --build-arg "BASE_IMAGE=$base_image" \
   --build-arg "AGENT_VERSION=$reported" \
   --build-arg "AGENT_UID=$uid" \
@@ -144,7 +192,7 @@ created=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
   --label "org.agent-sandbox.extra-packages=$packages" \
   --label "org.agent-sandbox.git-commit=$commit" \
   --label "org.agent-sandbox.git-dirty=$dirty" \
-  --label "org.agent-sandbox.built-at=$created" .
+  --label "org.agent-sandbox.built-at=$created" "$build_context"
 
 check=$(read_agent_version "$agent" "$tmp")
 [ "$check" = "$reported" ] || die "final image version $check does not match expected $reported"
