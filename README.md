@@ -59,3 +59,16 @@ Repeat `--skills PATH` or `--skills-rw PATH` to mount skill directories beneath 
 ```
 
 Fast tests require no dependencies. Integration builds and smoke-tests images. Authentication persistence is manual: authenticate, exit, rerun authentication with the same state directory, and confirm credentials remain available.
+
+## License and third-party software
+
+The original wrappers, Dockerfile, and documentation in this repository are licensed under the [MIT License](LICENSE). The coding agents, base image, and installed tools are third-party software; this repository's license does not relicense them.
+
+- [Codex](https://github.com/openai/codex) is licensed under Apache-2.0.
+- [Pi](https://github.com/earendil-works/pi) is licensed under MIT.
+- [Claude Code](https://code.claude.com/docs/en/legal-and-compliance) is governed by Anthropic's applicable terms, not this repository's MIT license.
+- Node.js, Debian packages, and their dependencies retain their respective licenses and notices.
+
+The scripts build images locally and do not publish them. Before redistributing an image, review the licenses, notices, and vendor terms for the exact versions and dependencies it contains.
+
+Agent Sandbox is an independent project, not affiliated with or endorsed by OpenAI, Anthropic, or the Pi maintainers. The contribution here is the container setup and wrapper tooling, not the underlying agents.
